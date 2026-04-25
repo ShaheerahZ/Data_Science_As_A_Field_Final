@@ -1,0 +1,316 @@
+---
+title: "Final_COVID19"
+author: "S. Zafar"
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+  code_folding: hide
+---
+
+# Analysis: "Did the world get better at surviving COVID-19 over time, and did population size actually determine how hard US states were hit?"
+
+
+\
+
+## Importing Data
+
+\
+
+This report analyzes the COVID-19 dataset compiled by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University. The dataset tracks confirmed cases and deaths from COVID-19 across countries worldwide and across US states, starting from January 22nd 2020 through March 2023. It is publicly available on the Johns Hopkins GitHub repository.
+
+This report seeks to answer two questions:
+
+* Did the world get better at surviving COVID-19 over time?
+* Did population size actually determine how hard US states were hit?
+
+To answer these questions we will use four datasets:
+
+* Global confirmed cases: cumulative cases by country over time
+* Global deaths: cumulative deaths by country over time
+* US confirmed cases: cumulative cases by US county over time
+* US deaths: cumulative deaths by US county over time, including population data
+
+\
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We begin by loading the necessary libraries and importing all four datasets directly from the Johns Hopkins GitHub repository using reproducible URLs.
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggrepel)
+```
+
+```{r load datasets, include=FALSE}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+global_cases <- read_csv(paste0(url_in, "time_series_covid19_confirmed_global.csv"))
+global_deaths <- read_csv(paste0(url_in, "time_series_covid19_deaths_global.csv"))
+US_cases <- read_csv(paste0(url_in, "time_series_covid19_confirmed_US.csv"))
+US_deaths <- read_csv(paste0(url_in, "time_series_covid19_deaths_US.csv"))
+```
+
+## Tidying and Transforming Data
+
+The datasets are in wide format, each date has its own column resulting in over 1,000 columns per dataset. We use pivot_longer() to convert these date columns into rows, making the data easier to work with for analysis and visualization. We also convert the date column from a character string to a proper date format using mdy() from the lubridate package.
+
+```{r tidy1}
+# Tidy global cases
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c(`Province/State`, 
+                         `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat, Long)) %>%
+  mutate(date = mdy(date))
+
+# Tidy global deaths
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`, 
+                         `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat, Long)) %>%
+  mutate(date = mdy(date))
+```
+
+After tidying the global datasets we join them together into a single dataset called global and rename the columns for easier use. We also filter out rows where cases are zero since they add no analytical value.
+
+```{r tidy2}
+# Join global cases and deaths
+global <- global_cases %>%
+  full_join(global_deaths, 
+            by = c("Province/State", 
+                   "Country/Region", 
+                   "date")) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State = `Province/State`) %>%
+  filter(cases > 0)
+```
+
+Next we tidy the US datasets. These have a different structure from the global data with additional columns like UID, iso2, iso3, FIPS and Admin2. We keep only the columns relevant to our analysis and pivot the date columns into rows.
+
+```{r tidy3}
+# Tidy US cases
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+```
+
+The US deaths dataset contains an additional column, Population, which is essential for our analysis of whether population size determined how hard US states were hit. We tidy this dataset in the same way as US cases, keeping the population column.
+
+```{r tidy4}
+# Tidy US deaths
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+```
+
+Now we join the US cases and deaths into a single dataset called US. We also filter out rows where cases are zero and remove rows where population is zero to avoid division errors in our later analysis.
+
+```{r tidy5}
+# Join US cases and deaths
+US <- US_cases %>%
+  full_join(US_deaths, 
+            by = c("Admin2", 
+                   "Province_State",
+                   "Country_Region",
+                   "Combined_Key",
+                   "date")) %>%
+  filter(cases > 0) %>%
+  filter(Population > 0)
+```
+
+Both the global and US datasets are now clean and ready for analysis. The global dataset contains 306,827 rows covering 193 countries from January 2020 to March 2023. The US dataset contains 3,424,407 rows covering counties across all 50 states with population data included. We will now move to our two part analysis.
+
+\
+
+## Part 1: Global Case Fatality Rate Over Time
+
+To analyze whether the world got better at surviving COVID-19 over time, we calculate the Case Fatality Rate (CFR), the percentage of confirmed cases that resulted in death. A declining CFR over time would suggest improvements in treatment, medical knowledge, and healthcare response.
+
+```{r global CFR}
+# Calculate global CFR over time
+global_cfr <- global %>%
+  group_by(date) %>%
+  summarize(total_cases = sum(cases),
+            total_deaths = sum(deaths)) %>%
+  mutate(CFR = (total_deaths / total_cases) * 100) %>%
+  filter(total_cases > 0)
+```
+
+### Visualizing Data
+
+The following visualization shows how the global Case Fatality Rate changed over time. A declining trend would suggest the world became better at treating and surviving COVID-19.
+
+```{r visual1}
+ggplot(global_cfr, aes(x = date, y = CFR)) +
+  geom_line(color = "steelblue", linewidth = 0.8) +
+  geom_smooth(method = "loess", 
+              color = "red", 
+              se = FALSE,
+              linetype = "dashed") +
+  labs(title = "Global COVID-19 Case Fatality Rate Over Time",
+       x = "Date",
+       y = "Case Fatality Rate (%)") +
+  theme_minimal()
+```
+
+The global Case Fatality Rate peaked at nearly 8% in mid 2020 when the world had no established treatment protocols or vaccines. It then declined steadily to below 1% by early 2023. This dramatic decline suggests that the world did indeed get significantly better at surviving COVID-19 over time, likely due to improved treatments, widespread vaccination and the emergence of less deadly variants.
+
+Key observations:
+
+* Early 2020: CFR starts around 2-3% then spikes dramatically to nearly 8% by mid 2020. This was when the world had no treatment protocols, no vaccines and overwhelmed healthcare systems
+* Mid 2020 to 2021: CFR drops sharply from 8% back down to around 2.3%. Reflecting improving treatment protocols and better understanding of the virus
+* 2021 to 2022: CFR plateaus around 2%. Suggesting a stabilization period
+* Late 2022 to 2023: CFR drops sharply again to below 1%. Likely reflecting widespread vaccination and the emergence of less deadly variants like Omicron
+* The red trend line confirms the overall declining trend throughout the entire period
+
+\
+
+## Part 2: US State Population vs Death Rate
+
+In the second part of our analysis we investigate whether population size determined how hard US states were hit by COVID-19. To do this we aggregate the data to the state level, calculate deaths per thousand people, and compare this against state population sizes.
+
+```{r summarize at state level}
+# Summarize data at state level
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region) %>%
+  summarize(deaths = max(deaths),
+            cases = max(cases),
+            Population = max(Population),
+            .groups = "drop") %>%
+  mutate(deaths_per_thou = deaths * 1000 / Population) %>%
+  filter(cases > 0, Population > 0)
+```
+
+### Visualizing Data
+
+The following scatter plot compares state population size against deaths per thousand people. If population size was the main driver of COVID mortality we would expect a clear positive relationship, larger states having higher death rates. Points are labeled to identify specific states.
+
+```{r visual2, warning=FALSE}
+
+# List of territories to exclude
+territories <- c("American Samoa", "Guam", "Northern Mariana Islands", 
+                 "Puerto Rico", "Virgin Islands", "Diamond Princess",
+                 "Grand Princess")
+
+# Get correct state populations - take max per county first, then sum
+US_by_state <- US %>%
+  filter(!Province_State %in% territories) %>%
+  group_by(Province_State, Admin2) %>%
+  summarize(county_deaths = max(deaths),
+            county_cases = max(cases),
+            county_pop = max(Population),
+            .groups = "drop") %>%
+  group_by(Province_State) %>%
+  summarize(deaths = sum(county_deaths),
+            cases = sum(county_cases),
+            Population = sum(county_pop),
+            .groups = "drop") %>%
+  mutate(deaths_per_thou = deaths * 1000 / Population) %>%
+  filter(cases > 0, Population > 0)
+
+US_by_state %>%
+  ggplot(aes(x = Population/1000000, y = deaths_per_thou)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_text_repel(aes(label = Province_State), 
+                size = 2.5) +
+  geom_smooth(method = "lm", 
+              color = "red", 
+              se = FALSE,
+              linetype = "dashed") +
+  labs(title = "US State Population vs Deaths per Thousand",
+       x = "Population (Millions, Log Scale)",
+       y = "Deaths per Thousand") +
+  scale_x_log10() +
+  theme_minimal()
+```
+
+
+With corrected state population totals the scatter plot clearly shows that population size alone is a weak predictor of COVID mortality. Large states like California and Texas performed significantly better than the trend would predict, while smaller states like West Virginia and Mississippi had disproportionately high death rates. Vermont and Hawaii stand out as the most resilient states with the lowest death rates.
+
+Key observations:
+
+* Arizona has the highest death rate at around 4.5 per thousand, surprisingly high for a large state
+* Vermont and Hawaii have the lowest death rates, both below 2 per thousand
+* California and Texas, the two most populous states, both fall well below the trend line showing they performed better than expected
+* West Virginia and Mississippi, small states with very high death rates
+* Utah is an interesting outlier, medium sized state with surprisingly low death rate
+* The trend line still shows a weak positive relationship but scatter remains wide
+
+\
+
+## Modeling Data
+
+To formally test whether population size is a statistically significant predictor of COVID-19 mortality, we build a linear regression model with deaths per thousand as the outcome variable and population as the predictor. We use linear regression here because both variables are continuous numbers.
+
+```{r linear regression model}
+# Build linear regression model
+pop_model <- lm(deaths_per_thou ~ Population, data = US_by_state)
+summary(pop_model)
+```
+
+* Population coefficient: 1.187e-08 (essentially zero)
+* P-value: 0.486, much greater than 0.05, not statistically significant
+* R-squared: 0.00997, population explains only less than 1% of the variation in death rates
+* This formally confirms what the scatter plot suggested
+
+```{r visual3}
+# Add predictions to dataset
+US_by_state <- US_by_state %>%
+  mutate(PRED = predict(pop_model))
+
+# Plot actuals vs predictions
+ggplot(US_by_state, aes(x = Population/1000000)) +
+  geom_point(aes(y = deaths_per_thou, color = "Actual")) +
+  geom_line(aes(y = PRED, color = "Predicted")) +
+  labs(title = "Actual vs Predicted Deaths per Thousand",
+       x = "Population (Millions)",
+       y = "Deaths per Thousand",
+       color = "Legend") +
+  theme_minimal()
+```
+
+* The predicted line is almost completely flat, barely rising from left to right
+* Actual points are scattered widely above and below the line
+* The three points at the bottom left are likely Vermont, Hawaii and Utah, our resilient states
+
+The linear regression model formally confirms what the scatter plot suggested. Population size is not a statistically significant predictor of COVID-19 death rates across US states (p-value = 0.486, R-squared = 0.01). This means population size explains less than 1% of the variation in death rates between states. Other factors such as age demographics, healthcare access, vaccination rates and government policies likely played a far more significant role in determining how hard each state was hit.
+
+\
+
+## Conclusion
+
+This analysis set out to answer two questions, did the world get better at surviving COVID-19 over time, and did population size determine how hard US states were hit?
+
+#### Part 1: Global Case Fatality Rate:
+The data clearly shows that the world did get significantly better at surviving COVID-19 over time. The global Case Fatality Rate peaked at nearly 8% in mid 2020 when the world had no established treatments or vaccines. It then declined steadily to below 1% by early 2023. This dramatic improvement likely reflects advances in medical treatment, widespread vaccination campaigns, and the emergence of less deadly variants like Omicron.
+
+#### Part 2: US State Population vs Death Rate:
+Population size alone is not a significant predictor of COVID-19 mortality across US states. The linear regression model showed a p-value of 0.486 and an R-squared of less than 1%, meaning population size explains virtually none of the variation in death rates between states. Large states like California and Texas performed better than expected while smaller states like West Virginia and Mississippi had disproportionately high death rates. Vermont, Hawaii and Utah stood out as the most resilient states. This suggests that factors beyond population size, such as age demographics, healthcare access, vaccination rates and government policies — played a far more significant role.
+
+## Bias
+
+Several potential sources of bias should be acknowledged in this analysis:
+
+* Reporting Bias: The dataset relies on confirmed cases which depend heavily on testing availability. Countries and states with limited testing capacity likely underreported cases, artificially inflating their Case Fatality Rates since deaths are harder to hide than cases.
+
+* Data Quality Bias: Different countries and states had different definitions of a COVID death. Some counted only laboratory confirmed COVID deaths while others counted any death where COVID was suspected. This inconsistency makes direct comparisons less reliable.
+
+* Time Lag Bias: The Case Fatality Rate calculation compares cumulative cases and deaths at the same point in time. However deaths typically lag behind cases by several weeks, meaning the CFR may be slightly overestimated during periods of rapid case growth and underestimated during declining periods.
+
+* Population Data Bias: The population data in the Johns Hopkins dataset reflects county level census estimates which may not accurately represent the true population during the pandemic, particularly in states with significant migration patterns.
+
+* Personal Bias: This analysis was motivated by curiosity about global resilience and healthcare equity. There may be an unconscious tendency to highlight findings that suggest systemic factors, like healthcare access, over individual behaviors. To mitigate this the analysis focused strictly on what the data shows without drawing conclusions beyond what the statistical results support.
