@@ -1,0 +1,335 @@
+---
+title: "NYPDshootingIncident"
+author: "S. Zafar"
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+  code_folding: hide
+---
+# Analysis: "When, Where, and Who Was Shot Which Resulted in a Murder?"
+
+\
+
+## Importing NYPD Shooting Incident Data
+
+\
+
+The data set contains shootings in New York City, with each row representing a single shooting incident. In total, the data set contains information about the time and location of the shooting incident, demographic information about both the victim and the perpetrator in the shooting incident, and the outcome of the shooting incident in terms of homicide or non-homicide.
+
+\
+
+* ### Load Libraries
+```{r tidyverse and lubridate, include=FALSE}
+library(tidyverse)
+library(lubridate)
+```
+* ### Save link in url and table in nypd_data
+
+```{r nypd_data, include=FALSE}
+url <- "https://data.cityofnewyork.us/api/views/98wc-x49t/rows.csv?accessType=DOWNLOAD"
+nypd_data <- read_csv(url)
+```
+* ### Summary of the Data
+
+\
+
+Summary of the original data before cleaning
+```{r summary}
+summary(nypd_data)
+```
+
+## Scanning the Data for Placeholders/NAs
+
+\
+
+* #### Placeholders: Perpetrator Sex
+```{r Perpetrator Sex}
+table(nypd_data$PERP_SEX)
+```
+
+\
+
+* #### Placeholders: Perpetrator Race
+```{r Perpetrator Race}
+table(nypd_data$PERP_RACE)
+```
+
+\
+
+* #### Placeholders: Perpetrator Age Group
+```{r Perpetrator Age Group}
+table(nypd_data$PERP_AGE_GROUP)
+```
+
+## Tidying and Transforming Data
+
+\
+
+* #### Replacing (null) with UNKNOWN
+
+I used str_replace() with 'fixed' since null contains parentheses and causes function to not match exactly.
+```{r replace nulls}
+nypd_data <- nypd_data %>%
+  mutate(PERP_SEX = str_replace(PERP_SEX, fixed("(null)"), "UNKNOWN"),
+         PERP_RACE = str_replace(PERP_RACE, fixed("(null)"), "UNKNOWN"),
+         PERP_AGE_GROUP = str_replace(PERP_AGE_GROUP, fixed("(null)"), "UNKNOWN"))
+```
+ \ 
+ 
+* #### Removing unnecessary columns 
+
+I am dropping the X Y coordinates, Latitude, Longitude, and New Georeferenced columns since the data already has a column named Boro. This column alone should be suffiecient for the analyses. Next, I removed Location Description as well since about 67% of the cells were empty.
+
+```{r drop columns part 1}
+nypd_data <- nypd_data %>%
+  select(-c(X_COORD_CD, Y_COORD_CD, Latitude, Longitude, 
+            `New Georeferenced Column`, INCIDENT_KEY, LOCATION_DESC))
+```
+
+Then, after viewing the remaining data, I realized that I would remove two more columns since they are not required for my analyses, Juristiction Code and Precinct.
+
+```{r drop columns part 2}
+nypd_data <- nypd_data %>%
+  select(-c(JURISDICTION_CODE, PRECINCT))
+```
+
+\
+
+* #### Converting Date Columns and Categorical Columns to Factors
+
+The date is currently a character string which needs to be converted to date format. Next, the categorical columns will be factored so that analyzing data will become easier while summarizing the data.
+```{r convert date and factor columns}
+nypd_data <- nypd_data %>%
+  mutate(
+    OCCUR_DATE = mdy(OCCUR_DATE),
+    BORO = as.factor(BORO),
+    LOC_OF_OCCUR_DESC = as.factor(LOC_OF_OCCUR_DESC),
+    LOC_CLASSFCTN_DESC = as.factor(LOC_CLASSFCTN_DESC),
+    STATISTICAL_MURDER_FLAG = as.factor(STATISTICAL_MURDER_FLAG),
+    PERP_AGE_GROUP = as.factor(PERP_AGE_GROUP),
+    PERP_SEX = as.factor(PERP_SEX),
+    PERP_RACE = as.factor(PERP_RACE),
+    VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),
+    VIC_SEX = as.factor(VIC_SEX),
+    VIC_RACE = as.factor(VIC_RACE)
+  )
+
+summary(nypd_data)
+```
+
+## Visualizing Data
+
+\
+
+* ### Visualization 1: Shootings by borough colored by murder outcome
+```{r visual1}
+ggplot(nypd_data, aes(x = BORO, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar() +
+  labs(title = "Shootings by Borough",
+       x = "Borough",
+       y = "Number of Incidents",
+       fill = "Murder") +
+  theme_minimal()
+```
+
+\
+
+Key observations:
+
+* BRONX has the highest number of shootings
+* STATEN ISLAND has the fewest 
+* BRONX and BROOKLYN also have the highest number of murders in absolute numbers
+* However murder proportion varies across boroughs, which raises a question:
+
+"Is the murder rate actually different across boroughs or does it just look that way because of the total number of incidents?"
+
+
+\
+
+* #### Lethality Rate by Borough
+```{r table}
+nypd_lethality <- nypd_data %>%
+  group_by(BORO) %>%
+  summarize(
+    Total_Shootings = n(),
+    Total_Murders = sum(STATISTICAL_MURDER_FLAG == "Y"),
+    Lethality_Rate = round((Total_Murders / Total_Shootings) * 100, 1)
+  ) %>%
+  arrange(desc(Lethality_Rate))
+
+nypd_lethality
+```
+
+\
+
+Looking at raw numbers alone can be misleading. So I calculated the lethality rate, that's the percentage of shootings that resulted in a murder for each borough. This gives us a fairer comparison since boroughs have very different total numbers of incidents.
+
+Key observations:
+
+* BRONX has the highest lethality rate at 23.2%. Confirming it is the most dangerous borough not just in raw numbers but proportionally too
+* QUEENS is surprisingly second highest at 22.1%. Even though it had fewer total shootings
+* BROOKLYN and MANHATTAN are very close to each other at around 19.8-19.9%
+* STATEN ISLAND has the lowest lethality rate at 12.5%. However, with only 8 total shootings this is a very small sample size and may not be statistically reliable
+
+
+\
+
+* ### Visualization 2: Shootings by month colored by murder outcome
+```{r visual2}
+nypd_data <- nypd_data %>%
+  mutate(MONTH = month(OCCUR_DATE, label = TRUE))
+
+ggplot(nypd_data, aes(x = MONTH, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar() +
+  labs(title = "Shootings by Month",
+       x = "Month",
+       y = "Number of Incidents",
+       fill = "Murder") +
+  theme_minimal()
+```
+
+\
+
+Key observations:
+
+* February and March have the lowest number of shootings
+* April shows a sharp spike 
+* August has the highest number of shootings
+* January to March show a clear dip followed by a rise through spring and summer suggesting a seasonal pattern
+* The murder proportion appears relatively consistent across months meaning that the murders seem to happen at a fairly steady rate regardless of season
+
+\
+
+* ### Visualization 3: Murder cases by victim race
+```{r visual3}
+nypd_data %>%
+  filter(STATISTICAL_MURDER_FLAG == "Y") %>%
+  ggplot(aes(x = VIC_RACE)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Murder Cases by Victim Race",
+       x = "Victim Race",
+       y = "Number of Murders") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+\
+
+Key observations:
+
+* BLACK victims overwhelmingly account for the most murders
+* WHITE HISPANIC is the second highest group with around 35 murders
+* BLACK HISPANIC, WHITE, and ASIAN/PACIFIC ISLANDER are significantly lower
+* No UNKNOWN appears here because we filtered for confirmed murder cases only
+
+However, this chart shows raw counts not rates. BLACK is also the largest victim group in the overall dataset with 530 out of 769 incidents. So, this visualization alone doesn't tell us whether BLACK victims are disproportionately more likely to be murdered when shot, it simply reflects the overall composition of shooting victims in our dataset.
+
+
+\
+
+## Modeling Data
+
+\
+
+#### Model 1
+
+```{r model}
+nypd_data <- nypd_data %>%
+  mutate(MURDER_NUM = ifelse(STATISTICAL_MURDER_FLAG == "Y", 1, 0))
+
+model <- glm(MURDER_NUM ~ BORO, 
+             data = nypd_data, 
+             family = binomial)
+
+summary(model)
+```
+
+\
+
+In order to find out if the area where the shooting took place has any effect on its ending up with a murder, a logistic regression analysis was conducted, taking borough into consideration as the predictor variable.
+
+
+* Predictor variable: BORO 
+
+* Reference category: BRONX 
+
+* All boroughs showed negative coefficients compared to BRONX, meaning lower murder likelihood than the Bronx 
+
+* STATEN ISLAND had the largest negative coefficient (-0.746), lowest murder likelihood 
+
+
+As per the results, all other boroughs except for the Bronx had a slightly less chance of shootings ending up with murders. Nevertheless, no borough proved to be statistically significant predictors of a murder (all p-values >0.05).
+
+\
+
+#### Model 2 (Updated Model)
+
+```{r updated model}
+model2 <- glm(MURDER_NUM ~ BORO + VIC_AGE_GROUP + LOC_CLASSFCTN_DESC, 
+              data = nypd_data, 
+              family = binomial)
+
+summary(model2)
+```
+
+\
+
+A second model was built adding victim age group and location classification to see if these variables improved our ability to predict murder outcomes.
+
+* QUEENS is the only borough showing a positive coefficient this time, meaning slightly higher murder likelihood than BRONX, but still not significant
+* All age groups show positive coefficients compared to the reference group under 18, meaning older victims have higher murder likelihood, with 65+ being the highest at 0.996, logically consistent but still not statistically significant.
+* All location types show negative coefficients compared to the reference, meaning STREET, HOUSING and DWELLING all have lower murder likelihood than COMMERCIAL locations 
+* HOUSING locations show the largest negative coefficient at -1.699, meaning shootings in housing areas are less likely to result in murder compared to commercial areas
+
+The model's performance showed a small improvement. However, the main conclusion remains: the variables in this dataset aren't strong enough to predict whether a shooting will result in a murder. This raises an important question: are there other factors, like the type of weapon used or the number of shots fired, that could better explain the outcomes of murders?
+
+\
+
+## Plotting Actuals vs Predictions
+
+\
+
+```{r prediction}
+nypd_data <- nypd_data %>%
+  mutate(PRED = predict(model2, type = "response"))
+
+ggplot(nypd_data, aes(x = PRED, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Predicted Probability Distribution by Murder Outcome",
+       x = "Predicted Probability of Murder",
+       y = "Density",
+       fill = "Murder") +
+  theme_minimal()
+```
+
+\
+
+This plot shows how well our model separates murder cases from non murder cases.
+
+* Pink curve: non murder cases
+* Teal curve: murder cases
+* Both curves peak at almost the same predicted probability around 0.20-0.25
+* Heavy overlap between the two curves
+
+A good model would show two clearly separated peaks. Instead our curves are almost identical, visually confirming that our variables cannot reliably predict murder outcomes.
+
+\
+
+## Conclusion
+
+\
+
+The purpose of this analysis was to find the answers to several important questions: when, where, and whom was killed by a gun shot in NYC? 
+
+* **When?** Shootings peak in summer months, especially August. February and March are the quietest months. Season influences frequency but not lethality.
+* **Where?** Bronx has the most shootings and highest lethality rate at 23.2%. Staten Island has the fewest but its small sample size makes conclusions unreliable.
+* **Who?** BLACK victims account for the overwhelming majority of murder cases. However this reflects the overall composition of shooting victims, not necessarily a disproportionate murder rate.
+* **Can we predict murder outcomes?** Our logistic regression models showed that borough, victim age group and location type alone are not sufficient predictors. Additional variables like weapon type or number of shots fired would be needed.
+
+## Bias
+
+\
+
+* **Reporting Bias** Not all shootings may be reported equally across boroughs. More police presence in certain areas could mean more recorded incidents.
+* **Missing Data Bias** 263 out of 769 perpetrators are UNKNOWN. This limits our ability to draw conclusions about perpetrator demographics.
+* **Geographic Bias** Using borough as a location variable oversimplifies geography. Neighborhoods within the same borough can be very different.
+* **Personal Bias** A strong sense of justice motivated this analysis. Efforts were made to present findings objectively without drawing conclusions beyond what the data supports.
